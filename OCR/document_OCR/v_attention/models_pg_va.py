@@ -173,3 +173,187 @@ class LineDecoderCTC(nn.Module):
         out = log_softmax(out, dim=1)
         return out, h
 
+    
+class RNNDecoder(nn.Module):
+    def __init__(self, embed_size, num_layers, drop=0.3):
+        super().__init__()
+
+        self.num_layers = num_layers
+        self.rnn = nn.GRU(embed_size, embed_size, num_layers)
+        if self.num_layers > 1: self.rnn.dropout = drop
+
+    def forward(self, hidden, context):
+        _, h = self.rnn(context.unsqueeze(0), hidden.expand(self.num_layers, -1, -1).contiguous())
+
+        return h[-1]
+
+class DeepOutputLayer(nn.Module):
+    def __init__(self, embed_size, vocab_size, drop=0.3):
+        super().__init__()
+        
+        self.l1 = nn.Linear(embed_size*2, embed_size)
+        self.l2 = nn.Linear(embed_size, vocab_size+1)
+        self.drop = nn.Dropout(drop)
+        
+    def forward(self, hidden, context):
+        # this is called once for each timestep
+        #(30,256)
+        out = self.l1(torch.cat([hidden,context], -1))
+        out = self.l2(self.drop(F.leaky_relu(out)))
+        return out
+
+class Embedding(nn.Module):
+    def __init__(self, vocab, d_model, drop=0.2):
+        super(Embedding, self).__init__()
+        self.lut = nn.Embedding(vocab, d_model)
+        self.d_model = d_model
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x):
+        emb = self.lut(x) * math.sqrt(self.d_model)
+        return self.drop(emb)
+    
+
+class LineDecoderCTC1(torch.nn.Module):
+    def __init__(self, params):
+        super(LineDecoderCTC1, self).__init__()
+
+        self.params = params
+        self.hidden_size = 256 #params["hidden_size"]
+        self.batch_size =  params["training_params"]["batch_size"] # 2
+        self.max_line_len = 10 # assuming there will be max 10 words in a line
+
+        self.hidden = torch.zeros(self.batch_size, self.hidden_size).to("cuda")
+
+        self.use_hidden = True #params["use_hidden"]
+        self.input_size = 256 #params["features_size"]
+        self.vocab_size = 79 #params["vocab_size"]
+        self.attention = BahdanauAttention1(self.hidden_size).to("cuda:0")
+        self.word_context_vectors = []
+        self.dec_inp = []
+        
+        self.context_vector2 = None
+        self.context_vector = None 
+        self.attention_weights = None
+        
+        self.wrdCon2Dcd = Linear(256,self.input_size) # this will take input word context vector and
+                                                             # converts it to the shape that LSTM can process 
+
+        self.decoder = RNNDecoder(self.hidden_size,1).to("cuda:0")
+        self.output  = DeepOutputLayer(self.hidden_size, self.vocab_size).to("cuda:0")
+                
+        if self.use_hidden:
+            
+            self.lstm = LSTM(self.input_size, self.hidden_size, num_layers=1)
+            self.end_conv = Conv2d(in_channels=self.hidden_size, out_channels=self.vocab_size + 1, kernel_size=1)
+            
+            """
+            self.lstm1 = LSTM(self.input_size, self.hidden_size, num_layers=1)
+            self.end_conv1 = Conv2d(in_channels=self.hidden_size, out_channels=self.vocab_size + 1, kernel_size=1)
+            """
+        else:
+            self.end_conv = Conv2d(in_channels=self.input_size, out_channels=self.vocab_size + 1, kernel_size=1)
+        
+
+        self.linear1 = Linear(256, 256).to("cuda:0")
+            
+
+    def forward(self, x, h=None):
+                        
+                
+        """
+        x (B, C, W)
+        """
+        
+        
+        res,attns = [],[]
+        
+        x1 = x.clone() # torch.Size([1, 256, 116])
+        x1 = x1.to("cuda:0")
+        x1 = x1.permute(0,2,1)
+        
+        print("\n\t x1.shape:",x1.shape)
+        print("\n\t 1:",x1.device," \t x.device:",x.device)
+        
+        hidden_rep = self.linear1(x1)
+
+        #print("\n\t 2")
+        
+        print("\n\t 1.x.shape:",x1.shape,"\t x.shape:",x.shape,"\t hidden_rep.shape:",hidden_rep.shape)        
+        #           1.x1.shape: torch.Size([2, 116, 256]) 	 x.shape: torch.Size([2, 256, 116]) 	 hidden_rep.shape: torch.Size([2, 116, 256])
+
+        print("\n\t self.hidden:",self.hidden.shape) # torch.Size([2, 256])
+        for i in range(self.max_line_len):
+            print("\n\t i:",i)
+
+            self.context_vector, self.context_vector2, self.attention_weights = self.attention(self.hidden, hidden_rep)
+            
+            encoder_outputs = hidden_rep.clone()
+            
+            print("\n\t ii:",self.context_vector.shape, self.context_vector2.shape, self.attention_weights.shape,encoder_outputs.shape)
+            # 	 ii: torch.Size([1, 256, 116]), torch.Size([1, 256]), torch.Size([1, 116]) torch.Size([1, 116, 256])
+
+            print("\n\t word context_vector:",self.context_vector.permute(2, 0, 1).shape," \t attention_weights.shape:",self.attention_weights.shape)
+            print("\n\t word context_vector2:",self.context_vector2.shape) #  torch.Size([batch_size, 256])
+
+            print("\n\t self.hidden.shape before:",self.hidden.shape) # torch.Size([1, 256])
+            self.hidden = self.decoder(self.hidden,self.context_vector2)  
+            print("\n\t self.hidden.shape after:",self.hidden.shape) # torch.Size([1, 256])
+            
+            charOut = self.output(self.hidden, self.context_vector2)
+            print("\n\t charOut.shape =",charOut.shape) # charOut.shape = torch.Size([1, 80])
+            
+            charOut = log_softmax(charOut, dim=1)
+            
+            res.append(charOut)
+            attns.append(self.attention_weights)
+            #dec_inp = charOut.data.max(1)[1]
+
+            self.dec_inp.append(charOut.data.max(1)[1])
+            
+            #############################################################################################################
+
+            
+        res = torch.stack(res)
+        attns = torch.stack(attns)
+        return res, attns, self.dec_inp
+
+
+class BahdanauAttention1(torch.nn.Module):
+    def __init__(self, hidden_size):
+        super(BahdanauAttention1, self).__init__()
+        self.hidden_size = hidden_size
+        self.W1 = Linear(hidden_size, hidden_size, bias=False)
+        self.W2 = Linear(hidden_size, hidden_size, bias=False)
+        self.V = Linear(hidden_size, 1, bias=False)
+
+    def forward(self, hidden, encoder_outputs):
+        # hidden shape: (batch_size, hidden_size)
+        # encoder_outputs shape: (batch_size, max_line_len, hidden_size)
+
+        # Compute attention scores
+        hidden = hidden.unsqueeze(1)  # (batch_size, 1, hidden_size)
+        W1_hidden = self.W1(hidden)  # (batch_size, 1, hidden_size)
+        W2_encoder = self.W2(encoder_outputs)  # (batch_size, max_line_len, hidden_size)
+        scores = self.V(torch.tanh(W1_hidden + W2_encoder))  # (batch_size, max_line_len, 1)
+
+        # Compute attention weights
+        attention_weights = torch.softmax(scores, dim=1)  # (batch_size, max_line_len, 1)
+        print("\n\t attention_weights =",attention_weights.shape)
+        
+        #attention_weights = attention_weights.squeeze(2)
+        
+        # Compute context vector
+        context_vector = (attention_weights * encoder_outputs).sum(dim=1)  # (batch_size, hidden_size)
+        
+        context_vector2 = context_vector.clone()
+        
+        context_vector = context_vector.unsqueeze(0).transpose(1, 2).repeat(1, encoder_outputs.shape[1], 1, 1)
+        context_vector = context_vector.squeeze(0)
+        context_vector = context_vector.permute(2,1,0) # torch.Size([3, 256, 116])
+        
+        
+        # context_vector shape: (1, max_line_len, batch_size, hidden_size)
+
+        return context_vector,context_vector2, attention_weights.squeeze(2)
+

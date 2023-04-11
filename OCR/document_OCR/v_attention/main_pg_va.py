@@ -33,7 +33,12 @@
 #  knowledge of the CeCILL-C license and that you accept its terms.
 
 import sys
-sys.path.insert(0, '../../..')
+#sys.path.insert(0, '../../..')
+#/home/aniketag/Documents/phd/TensorFlow-2.x-YOLOv3_simula/Handwriting-1-master/VerticalAttentionOCR
+
+#sys.path.insert(0, '/home/aniketag/Documents/phd/TensorFlow-2.x-YOLOv3_simula/Handwriting-1-master/VerticalAttentionOCR/')
+sys.path.append('/home/aniketag/Documents/phd/TensorFlow-2.x-YOLOv3_simula/Handwriting-1-master/VerticalAttentionOCR/')
+
 from torch.optim import Adam
 from OCR.document_OCR.v_attention.trainer_pg_va import Manager
 from OCR.document_OCR.v_attention.models_pg_va import VerticalAttention, LineDecoderCTC
@@ -41,6 +46,8 @@ from basic.models import FCN_Encoder
 from basic.generic_dataset_manager import OCRDataset
 import torch
 import torch.multiprocessing as mp
+torch.autograd.set_detect_anomaly(True)
+
 
 
 def train_and_test(rank, params):
@@ -60,11 +67,13 @@ def train_and_test(rank, params):
         for set_name in ["test", "valid", "train"]:
             model.predict("{}-{}".format(dataset_name, set_name), [(dataset_name, set_name), ], metrics, output=True)
 
+from OCR.document_OCR.v_attention.parameters  import params
 
 if __name__ == "__main__":
 
     dataset_name = "IAM"  # ["RIMES", "IAM", "READ_2016"]
 
+    """
     params = {
         "dataset_params": {
             "datasets": {
@@ -215,6 +224,7 @@ if __name__ == "__main__":
         },
 
     }
+    """
 
     if params["training_params"]["stop_mode"] == "learned":
         params["training_params"]["train_metrics"].append("loss_ce")

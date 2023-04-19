@@ -1,7 +1,5 @@
 import sys
-sys.path.insert(0, '/home/aniketag/Documents/phd/TensorFlow-2.x-YOLOv3_simula/Handwriting-1-master/VerticalAttentionOCR/')
-
-
+sys.path.append('/global/D1/projects/ZeroShot_Word_Recognition/E2E/VerticalAttentionOCR/')
 
 from torch.optim import Adam
 from OCR.document_OCR.v_attention.trainer_pg_va import Manager
@@ -16,7 +14,7 @@ dataset_name = "IAM"  # ["RIMES", "IAM", "READ_2016"]
 params = {
     "dataset_params": {
         "datasets": {
-            dataset_name: "/media/aniketag/c4eb0693-4a65-4f0c-8d65-a6dad4b97ff9/IAM/formatted/{}_paragraph".format(dataset_name),
+            dataset_name: "./{}_paragraph".format(dataset_name),
         },
         "train": {
             "name": "{}-train".format(dataset_name),
@@ -98,7 +96,7 @@ params = {
             "encoder": FCN_Encoder,
             "attention": VerticalAttention,
             "decoder": LineDecoderCTC,
-
+            "decoder1": LineDecoderCTC1,
         },
         "transfer_learning": None,
         # "transfer_learning": {
@@ -136,12 +134,12 @@ params = {
         "output_folder": "van_iam_paragraph_learned_stop",  # folder names for logs and weigths
         "max_nb_epochs": 5000,  # max number of epochs for the training
         "max_training_time": 3600 * (24 + 23),  # max training time limit (in seconds)
-        "load_epoch": "best",  # ["best", "last"], to load weights from best epoch or last trained epoch
+        "load_epoch": None,  # ["best", "last"], to load weights from best epoch or last trained epoch
         "interval_save_weights": None,  # None: keep best and last only
         "batch_size": 1,  # mini-batch size per GPU
-        "use_ddp": False,  # Use DistributedDataParallel
+        "use_ddp": True,  # Use DistributedDataParallel
         "ddp_port": "10000",  # Port for Distributed Data Parallel communications
-        "use_apex": True,  # Enable mix-precision with apex package
+        "use_apex": False,  # Enable mix-precision with apex package
         "nb_gpu": torch.cuda.device_count(),
         "optimizer": {
             "class": Adam,

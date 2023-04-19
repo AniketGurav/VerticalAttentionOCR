@@ -50,12 +50,13 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from PIL import Image
 from torchvision.utils import save_image
+import torch
 
 # https://thor.robots.ox.ac.uk/~vgg/data/text/mjsynth.tar.gz
 import sys
 
 #sys.path.insert(0, '/home/aniketag/Documents/phd/TensorFlow-2.x-YOLOv3_simula/Handwriting-1-master/VerticalAttentionOCR/')
-sys.path.append('/home/aniketag/Documents/phd/TensorFlow-2.x-YOLOv3_simula/Handwriting-1-master/VerticalAttentionOCR/')
+sys.path.append('/global/D1/projects/ZeroShot_Word_Recognition/E2E/VerticalAttentionOCR/')
 
 from OCR.document_OCR.v_attention.models_pg_va import VerticalAttention, LineDecoderCTC , LineDecoderCTC1
 #from OCR.document_OCR.v_attention.parameters import params as params1
@@ -63,6 +64,27 @@ from OCR.document_OCR.v_attention.models_pg_va import VerticalAttention, LineDec
 #from parameters import params as params1
 
 dataset_name = "IAM"  # ["RIMES", "IAM", "READ_2016"]
+
+
+def seq2seq_loss(input, target):
+    target = target.permute(1,0).contiguous()
+    tsl = target.size(0)
+    sl,bs,nc = input.size()
+    
+    #print("\n\t input.size():",input.size())
+    ##print("\n\t target:",target.shape)
+    #print("\n\t sl:",sl,"\t tsl:",tsl)
+    
+    if sl>tsl: target = F.pad(target, (0,0,0,sl-tsl))
+    if tsl>sl: target = target[:sl]   # clip target to match input seq_len
+        
+    targ = target.view(-1)
+    pred = input.view(-1, nc)
+
+    # combination of LogSoftmax and NLLLoss
+    return F.cross_entropy(pred, targ.long(), reduction='sum')/bs
+
+
 
 class Manager(GenericTrainingManager):
 
@@ -76,7 +98,7 @@ class Manager(GenericTrainingManager):
         """
             this is modified line decoding to handle the output at character level
         """
-        self.ldc1 = LineDecoderCTC1(params).to("cuda:0")
+        #self.ldc1 = LineDecoderCTC1(params).to("cuda:0")
 
 
     def get_init_hidden(self, batch_size):
@@ -97,7 +119,7 @@ class Manager(GenericTrainingManager):
     
     def train_batch(self, batch_data, metric_names):
         
-        print("\n\t yyyy:",self.dataset.tokens["blank"])
+        #print("\n\t yyyy:",self.dataset.tokens["blank"])
         
         loss_ctc_func = CTCLoss(blank=self.dataset.tokens["blank"], reduction="sum")
         loss_ce_func = CrossEntropyLoss(ignore_index=self.dataset.tokens["pad"])
@@ -136,35 +158,41 @@ class Manager(GenericTrainingManager):
             if mode in ["fixed", "early"] or i < max_nb_lines:
                 
 
-                probs, hidden = self.models["decoder"](context_vector, hidden)
+                #probs, hidden = self.models["decoder"](context_vector, hidden)
 
                 
                 #print("\n\t context_vector.shape:--->:",context_vector.shape,"\t hidden.shape:",hidden[0].shape)
+                
+                #res, attns, dec_inp = self.ldc1(context_vector, hidden)
+
+                res, attns, dec_inp = self.models["decoder1"](context_vector, hidden)
 
                 
-                res, attns, dec_inp = self.ldc1(context_vector, hidden)
-                
-                randLen = probs.shape[2]
+                #randLen = probs.shape[2]
                 
                 #res = torch.rand([randLen,1,80]).to("cuda:0")
                 #attns = torch.rand([randLen,1,randLen]).to("cuda:0")
                 
                 #res = res.permute(1,0,2)
                 #print(" \t res.shape:",res.shape,"\t attns.shape:",attns.shape) #," \t dec_inp.shape:",dec_inp.shape)
-                #print("\n\t ctc:",probs.permute(2, 0, 1).shape)
+                #print("\n\t ctc:",probs.shape)
+                
+                #print("\n\t y_len:",y_len)
                 
                 """
                 ctc: torch.Size([122, 1, 80])
              	res.shape: torch.Size([122, 1, 80]) 	 attns.shape: torch.Size([122, 1, 122])
                 """
+            
+                #loss_ctc1 = loss_ctc_func(probs.permute(2, 0, 1), y[i], x_reduced_len, y_len[i])
                 
-                
-                loss_ctc1 = loss_ctc_func(probs.permute(2, 0, 1), y[i], x_reduced_len, y_len[i])
-                #loss_ctc1 = loss_ctc_func(res, y[i], x_reduced_len, y_len[i])
+                crossLoss = seq2seq_loss(dec_inp, y[i]) 
+
+                loss_ctc1 = crossLoss #loss_ctc_func(res, y[i], x_reduced_len, y_len[i])
                 
                 #print("\n\t x_reduced_len.shape:",x_reduced_len," \t y_len[i].shape:",y_len[i])
                 
-                #print("\n\t loss_ctc =",loss_ctc.item()," loss_ctc1 =",loss_ctc1.item())
+                print("\n\t loss_ctc =",loss_ctc1.item()," loss_ctc1 =",loss_ctc1.item())
                 
                 #target = torch.zeros_like(res)
 
@@ -189,8 +217,21 @@ class Manager(GenericTrainingManager):
                 loss_ce = loss_ce_func(decision, gt_decision)
                 total_loss_ce += loss_ce.item()
                 global_loss += loss_ce
+                
+            res1 = res.permute(1,2,0)
+            #print("\n\t probs1:",probs.shape," \t res1.shape:",res.shape)
+            #line_pred1 = [torch.argmax(lp, dim=0).detach().cpu().numpy()[:x_reduced_len[j]] if y_len[i][j] > 0 else None for j, lp in enumerate(probs)]
+            line_pred = [torch.argmax(lp, dim=0).detach().cpu().numpy()[:x_reduced_len[j]] if y_len[i][j] > 0 else None for j, lp in enumerate(res1)]
 
-            line_pred = [torch.argmax(lp, dim=0).detach().cpu().numpy()[:x_reduced_len[j]] if y_len[i][j] > 0 else None for j, lp in enumerate(probs)]
+            """
+            line_pred = [] # res.shape: torch.Size([122, 1, 80]) 
+            for j, lp in enumerate(res1):
+                if y_len[i][j] > 0:
+                    line_pred_j = torch.argmax(lp, dim=0).detach().cpu().numpy()[:x_reduced_len[j]]
+                    line_pred.append(line_pred_j)
+                else:
+                    line_pred.append(None)
+            """
             for i, lp in enumerate(line_pred):
                 if lp is not None:
                     line_preds[i].append(lp)
@@ -241,7 +282,7 @@ class Manager(GenericTrainingManager):
 
         batch_size, c, h, w = features.size() # 
         
-        import torch
+
         #print("\n\t h=",h,"\t w:" ,w,"\t torch.__version__:",torch.__version__) # h= 25 	 w: 138
         
         attention_weights = torch.zeros((batch_size, h), device=self.device, dtype=torch.float)
@@ -500,6 +541,171 @@ class Manager(GenericTrainingManager):
             metrics["diff_len"] = diff_len
 
         return metrics
+
+    def evaluate_batch2(self, batch_data, metric_names,imgName):
+        
+        #print("\n\t inside evaluate_batch2!!")
+        
+        try:
+            print("\n\t batch_data.keys():",batch_data.keys())
+        except Exception as e:
+            print("\n\t exception in batch keys!!!")
+            pass
+        
+        def append_preds(pg_preds, line_preds):
+            for i, lp in enumerate(line_preds):
+                if lp is not None:
+                    pg_preds[i].append(lp)
+            return pg_preds
+
+        x = batch_data["imgs"].to(self.device) 
+        
+        orgH,orgW = x.shape[2],x.shape[3]
+        
+        #print("\n\t input image shape x =",x.shape,"\t orgH:",orgH,"\t orgW:",orgW) # x = torch.Size([8, 3, 786, 1100]) 
+        
+        y_len = batch_data["line_labels_len"]
+        x_reduced_len = [s[1] for s in batch_data["imgs_reduced_shape"]] 
+
+        #print("\n\t x_reduced_len =",len(x_reduced_len))
+        
+        status = "init" 
+        mode = self.params["training_params"]["stop_mode"] 
+        max_nb_lines = self.params["training_params"]["max_pred_lines"] # 
+        
+        features = self.models["encoder"](x)
+        
+        #print("\n\t features.shape:",features.shape) # features.shape: torch.Size([8, 256, 25, 138])
+
+        batch_size, c, h, w = features.size() # 
+        
+
+        #print("\n\t h=",h,"\t w:" ,w,"\t torch.__version__:",torch.__version__) # h= 25 	 w: 138
+        
+        attention_weights = torch.zeros((batch_size, h), device=self.device, dtype=torch.float)
+        #print("\n\t attention_weights =",attention_weights.shape)  # attention_weights = torch.Size([8, 25])  
+        
+        coverage = attention_weights.clone() if self.params["model_params"]["use_coverage_vector"] else None
+        hidden = [k for k in self.get_init_hidden(batch_size)] if self.params["model_params"]["use_hidden"] else None
+        preds = [list() for _ in range(batch_size)]
+        end_pred = [None for _ in range(batch_size)]
+
+        #print("\n\t max_nb_lines:",max_nb_lines) # max_nb_lines: 30 
+        #print("\n\t coverage =",coverage.shape)  # coverage = torch.Size([8, 25])
+        #print("\n\t hidden =",hidden[0].shape,"\t len:",len(hidden)) #  hidden = torch.Size([1, 8, 256])
+        try:
+            print("\n\t end_pred =",end_pred[0].shape,"\t end_pred :",len(end_pred)) 
+        except Exception as e:
+            pass
+        
+        currDocLine = dict()
+        #allLines = []
+        
+        currDocLine["currDocLine"] = []
+        currDocLine["imgName"] = imgName
+        #currDocLine = []
+        
+        import os
+
+        imgName = imgName[0] # /test/
+        
+        #print("\n\t imgName =",imgName)
+        
+        if "train" in imgName:
+            imgName = imgName.split("train/")[1]
+
+        elif "test" in imgName:
+            
+            #print("test imgName:",imgName)
+            imgName = imgName.split("test/")[1]
+        
+        elif "valid" in imgName: 
+            imgName = imgName.split("valid/")[1]
+
+        imgName = imgName.split(".png")[0]
+        #print("\n\t imgName =>>>",imgName)
+
+        # imgName: the name of the image file
+        if not os.path.exists('./attentionWeights1/'+imgName):
+            os.makedirs('./attentionWeights1/'+imgName)
+            
+        for i in range(max_nb_lines):
+            
+            #print("\n\t calling attention!!:",i)
+            context_vector, attention_weights, decision = self.models["attention"](features, attention_weights, coverage, hidden, status=status)
+            
+
+            
+            res, attns, dec_inp  = self.models["decoder1"](context_vector, hidden)
+                        
+            
+            status = "inprogress"
+
+            res1 = res.permute(1,2,0)
+            #line_pred = [torch.argmax(lp, dim=0).detach().cpu().numpy()[:x_reduced_len[j]] if y_len[i][j] > 0 else None for j, lp in enumerate(res1)]
+
+            
+            #print("\n\t y_len:",y_len)
+            
+            line_pred = []
+            for j, lp in enumerate(res1):
+                if 1:
+                    pred = torch.argmax(lp, dim=0).detach().cpu().numpy() #[:x_reduced_len[j]]
+                    line_pred.append(pred)
+                else:
+                    line_pred.append(None)
+
+
+
+            #line_pred = [torch.argmax(lp, dim=0).detach().cpu().numpy()[:x_reduced_len[j]] for j, lp in enumerate(probs)]
+                        
+            line_pred1 = [LM_ind_to_str(self.dataset.charset, self.ctc_remove_successives_identical_ind(p), oov_symbol="") if p is not None else "" for p in line_pred]
+
+            
+            print("\n\t line_pred =:",line_pred1)
+            
+            currDocLine["currDocLine"].append(line_pred1[0])
+            
+            # 0. line_pred = 8
+            
+            #print("\n\t 0. line_pred =",len(line_pred))
+            if mode == "learned":
+                decision = [torch.argmax(d, dim=0) for d in decision]
+                for k, d in enumerate(decision):
+                    if d == 0 and end_pred[k] is None:
+                        end_pred[k] = i
+
+            if mode in ["learned", "early"]:
+                for k, p in enumerate(line_pred):
+                    if end_pred[k] is None and np.all(p == self.dataset.tokens["blank"]):
+                        end_pred[k] = i
+            line_pred = [l if end_pred[j] is None else None for j, l in enumerate(line_pred)]
+            preds = append_preds(preds, line_pred)
+            
+            # 1. line_pred = 8
+            #print("\n\t 1. line_pred =",len(line_pred))
+
+            if np.all([end_pred[k] is not None for k in range(batch_size)]):
+                break
+
+        
+        allText = currDocLine["currDocLine"]
+        #print("\n\t allText1 =:",allText)        
+        
+        allText1 = "\n".join(allText)
+        #print("\n\t name of the document:",currDocLine["imgName"])
+        #print("\n\t allText =:",allText1)        
+        
+        metrics = self.compute_metrics(preds, batch_data["raw_labels"], metric_names, from_line=True)
+
+        if "diff_len" in metric_names:
+            end_pred = [end_pred[k] if end_pred[k] is not None else i for k in range(len(end_pred))]
+            diff_len = np.array(end_pred)-np.array(batch_data["nb_lines"])
+            metrics["diff_len"] = diff_len
+
+        return metrics
+
+
 
     def ctc_remove_successives_identical_ind(self, ind):
         res = []

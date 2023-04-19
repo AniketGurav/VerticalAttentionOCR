@@ -44,7 +44,7 @@ import torch.nn.functional as F
 from torch.nn import Conv1d, Conv2d, Dropout,  Linear, AdaptiveMaxPool2d, InstanceNorm1d, AdaptiveMaxPool1d
 from torch.nn import Flatten, LSTM, Embedding
 
-
+#from OCR.document_OCR.v_attention.parameters  import params
 
 from basic.models import DepthSepConv2D
 
@@ -159,7 +159,7 @@ class VerticalAttention(nn.Module):
         temp = self.dropout(self.dense_enc(self.h_features.permute(0, 2, 1)))
         
         #print("\n\t temp.shape:",temp.shape) #  temp.shape: torch.Size([8, 25, 256])
-        sum += temp
+        sum += temp  #change 3
 
         cat = torch.cat([c.unsqueeze(1) for c in cat], dim=1)
         cat = self.norm(cat)
@@ -171,7 +171,9 @@ class VerticalAttention(nn.Module):
         # 	 cat[0]: torch.Size([16, 25]) 	 permute: torch.Size([8, 25, 16])
         
         catOut = self.dropout(self.dense_conv_block(cat.permute(0, 2, 1))) 
-        sum += self.dropout(self.dense_conv_block(cat.permute(0, 2, 1)))
+        sum += self.dropout(self.dense_conv_block(cat.permute(0, 2, 1)))  #  change 1
+        
+        
         #print("\n\t 1.sum:",sum.shape,"\t catOut.shape:",catOut.shape) # 1.sum: torch.Size([8, 25, 256])
         # 	 1.sum: torch.Size([8, 25, 256]) 	 catOut.shape: torch.Size([8, 25, 256])
 
@@ -189,10 +191,11 @@ class VerticalAttention(nn.Module):
             except Exception as e:
                 pass
             """
-            temp1 = self.dropout(self.dense_hidden(hidden[0]).permute(1, 0, 2))
             
+            temp1 = self.dropout(self.dense_hidden(hidden[0]).permute(1, 0, 2))
+            #temp1 = temp1.
             #print("\n\t temp1.shape =",temp1.shape) # temp1.shape = torch.Size([8, 1, 256])
-            sum += temp1 
+            sum += temp1 #change 2
 
         sum = tanh(sum)
         #print("\n\t 2.sum:",sum.shape) #	 2.sum: torch.Size([8, 25, 256]) it is Sₜ
@@ -333,7 +336,11 @@ class RNNDecoder(nn.Module):
         if self.num_layers > 1: self.rnn.dropout = drop
 
     def forward(self, hidden, context):
-        _, h = self.rnn(context.unsqueeze(0), hidden.expand(self.num_layers, -1, -1).contiguous())
+        
+        context = context.unsqueeze(0)    
+        hidden = hidden.expand(self.num_layers, -1, -1).contiguous()
+        
+        _, h = self.rnn(context,hidden)
 
         return h[-1]
 
@@ -342,7 +349,7 @@ class DeepOutputLayer(nn.Module):
         super().__init__()
         
         self.l1 = nn.Linear(embed_size*2, embed_size)
-        self.l2 = nn.Linear(embed_size, vocab_size+1)
+        self.l2 = nn.Linear(embed_size, vocab_size+2)
         self.drop = nn.Dropout(drop)
         
     def forward(self, hidden, context):
@@ -370,17 +377,20 @@ class LineDecoderCTC1(torch.nn.Module):
 
         self.params = params
         self.hidden_size = 256 #params["hidden_size"]
-        self.batch_size =  params["training_params"]["batch_size"] # 2
+        self.batch_size =  4 #params["training_params"]["batch_size"] # 2
         self.max_line_len = 150 # assuming there will be max 10 words in a line
-
+        
         self.hidden = torch.zeros(self.batch_size, self.hidden_size).to("cuda")
+        #self.hidden = torch.zeros(self.batch_size, self.hidden_size).to("cuda")
+        self.hidden2 = torch.zeros(self.batch_size, self.hidden_size).to("cuda")
 
+        self.maxChars = 0
         self.use_hidden = True #params["use_hidden"]
         self.input_size = 256 #params["features_size"]
         self.vocab_size = 79 #params["vocab_size"]
-        self.attention = BahdanauAttention1(self.hidden_size).to("cuda:0")
+        self.attention = BahdanauAttention1(self.hidden_size) #.to("cuda:0")
         self.word_context_vectors = []
-        self.dec_inp = []
+        self.dec_inp1 = []
         
         self.context_vector2 = None
         self.context_vector = None 
@@ -389,8 +399,8 @@ class LineDecoderCTC1(torch.nn.Module):
         self.wrdCon2Dcd = Linear(256,self.input_size) # this will take input word context vector and
                                                              # converts it to the shape that LSTM can process 
 
-        self.decoder = RNNDecoder(self.hidden_size,1).to("cuda:0")
-        self.output  = DeepOutputLayer(self.hidden_size, self.vocab_size).to("cuda:0")
+        self.CharDecoder = RNNDecoder(self.hidden_size,1) #.to("cuda:0")
+        self.output  = DeepOutputLayer(self.hidden_size, self.vocab_size) #.to("cuda:0")
                 
         if self.use_hidden:
             
@@ -417,8 +427,8 @@ class LineDecoderCTC1(torch.nn.Module):
         
         
         res,attns = [],[]
-        
-        maxChars = x.shape[2]
+        self.dec_inp1 = []
+        self.maxChars = x.shape[2]
         
         x1 = x.clone() # torch.Size([1, 256, 116])
         x1 = x1.to("cuda:0")                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
@@ -436,17 +446,33 @@ class LineDecoderCTC1(torch.nn.Module):
 
         #print("\n\t self.hidden:",self.hidden.shape) # torch.Size([2, 256])
         
-        randLen = maxChars
+        randLen = self.maxChars
         #res = torch.rand([randLen,1,80]).to("cuda:0") # [116,1,80]
         #attns = torch.rand([randLen,1,randLen]).to("cuda:0")
         #res = torch.zeros([1, randLen, 80], dtype=torch.float32, device="cuda:0")
 
-        for i in range(maxChars):
+        for i in range(self.maxChars):
             #print("\n\t char i:",i)
 
-            self.context_vector, self.context_vector2, self.attention_weights = self.attention(self.hidden, hidden_rep)
-            
             encoder_outputs = hidden_rep.clone()
+
+            if i == 0:
+                
+                self.hidden = torch.zeros(x1.shape[0], self.hidden_size).to("cuda")
+                
+                #print("\n\t using self.hidden:",torch.mean(self.hidden, dim = 1))
+                
+                self.context_vector, self.context_vector2, self.attention_weights = self.attention(self.hidden, hidden_rep)
+                self.hidden2 = self.CharDecoder(self.hidden,self.context_vector2)
+
+            else:
+                
+                #print("\n\t using self.hidden2:",torch.mean(self.hidden2, dim = 1))
+
+                self.context_vector, self.context_vector2, self.attention_weights = self.attention(self.hidden2, hidden_rep)
+                self.hidden2 = self.CharDecoder(self.hidden2,self.context_vector2)
+                
+                    
             
             #print("\n\t ii:",self.context_vector.shape, self.context_vector2.shape, self.attention_weights.shape,encoder_outputs.shape)
             # 	 ii: torch.Size([1, 256, 116]), torch.Size([1, 256]), torch.Size([1, 116]) torch.Size([1, 116, 256])
@@ -454,11 +480,26 @@ class LineDecoderCTC1(torch.nn.Module):
             #print("\n\t word context_vector:",self.context_vector.permute(2, 0, 1).shape," \t attention_weights.shape:",self.attention_weights.shape)
             #print("\n\t word context_vector2:",self.context_vector2.shape) #  torch.Size([batch_size, 256])
 
-            #print("\n\t self.hidden.shape before:",self.hidden.shape) # torch.Size([1, 256])
-            self.hidden = self.decoder(self.hidden,self.context_vector2)  
+            #print("\n\t self.hidden.shape before:",self.hidden.shape) # torch.Size([1, 256])   
+            
+            #self.hidden = self.decoder(self.hidden,self.context_vector2) 
+            
+            """            
+            if i == 0:
+                self.hidden2 = self.CharDecoder(self.hidden,self.context_vector2)
+            else:
+                self.hidden2 = self.CharDecoder(self.hidden2,self.context_vector2)
+            """
+            #self.context_vector2 = torch.rand([1,256]).to("cuda:0")
+            #self.hidden = torch.rand([1,256]).to("cuda:0")
+
+            
             #print("\n\t self.hidden.shape after:",self.hidden.shape) # torch.Size([1, 256])
             
-            charOut = self.output(self.hidden, self.context_vector2)
+            charOut = self.output(self.hidden2, self.context_vector2)
+            
+            self.dec_inp1.append(charOut)
+
             #print("\n\t charOut.shape =",charOut.shape) # charOut.shape = torch.Size([1, 80])
             
             charOut = log_softmax(charOut, dim=1)
@@ -469,14 +510,14 @@ class LineDecoderCTC1(torch.nn.Module):
             attns.append(self.attention_weights)
             #dec_inp = charOut.data.max(1)[1]
 
-            self.dec_inp.append(charOut.data.max(1)[1])
             
             #############################################################################################################
-
-            
+    
         res = torch.stack(res)
         attns = torch.stack(attns)
-        return res, attns, self.dec_inp
+        self.dec_inp1 = torch.stack(self.dec_inp1)
+        
+        return res, attns, self.dec_inp1
 
 
 class BahdanauAttention1(torch.nn.Module):
@@ -497,7 +538,7 @@ class BahdanauAttention1(torch.nn.Module):
         W2_encoder = self.W2(encoder_outputs)  # (batch_size, max_line_len, hidden_size)
         
         #print("\n\t W1_hidden.shape:",W1_hidden.shape,"\t W2_encoder.shape:",W2_encoder.shape)#,"\t self.batch_size:",self.batch_size)
-
+        #print("\n\t hidden.shape",hidden.shape, "\t encoder_outputs.shape:",encoder_outputs.shape)
         
         scores = self.V(torch.tanh(W1_hidden + W2_encoder))  # (batch_size, max_line_len, 1)
 
